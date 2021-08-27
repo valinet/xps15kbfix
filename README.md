@@ -1,7 +1,7 @@
 # xps15kbfix
 A simple Windows PS/2 filter driver based on the [sample from Microsoft](https://docs.microsoft.com/en-us/samples/microsoft/windows-driver-samples/keyboard-input-wdf-filter-driver-kbfiltr/) that remaps some keys on the Dell XPS 15 7590's keyboard to my personal preference.
 
-To run in a secure manner, [try this]().
+To run in a secure manner, [try this](https://github.com/valinet/ssde).
 
 To install, do this (use elevated "x64 Native Tools Command Prompt for Visual Studio 2019"):
 
