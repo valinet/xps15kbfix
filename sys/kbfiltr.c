@@ -47,6 +47,12 @@ Environment:
 
 ULONG InstanceNo = 0;
 
+UINT32 Hash32(WCHAR* str) {
+    UINT32 h = 0;
+    for (wchar_t* p = str; *p != '\0'; p++) h = 31 * h + *p;
+    return h; // or, h % ARRAY_SIZE;
+}
+
 NTSTATUS
 DriverEntry(
     IN PDRIVER_OBJECT  DriverObject,
@@ -151,6 +157,13 @@ Return Value:
 
     DebugPrint(("Enter FilterEvtDeviceAdd \n"));
 
+    ULONG kHardwareId = 0;
+
+    PDEVICE_OBJECT PDO = WdfFdoInitWdmGetPhysicalDevice(DeviceInit);
+    if (PDO) {
+        IoGetDeviceProperty(PDO, DevicePropertyHardwareID, 0, NULL, &kHardwareId);
+    }
+
     //
     // Tell the framework that you are filter driver. Framework
     // takes care of inherting all the device flags & characterstics
@@ -161,6 +174,7 @@ Return Value:
     WdfDeviceInitSetDeviceType(DeviceInit, FILE_DEVICE_KEYBOARD);
 
     WDF_OBJECT_ATTRIBUTES_INIT_CONTEXT_TYPE(&deviceAttributes, DEVICE_EXTENSION);
+    if (kHardwareId) deviceAttributes.ContextSizeOverride = sizeof(DEVICE_EXTENSION) + sizeof(UINT64) + kHardwareId;
 
     //
     // Create a framework device object.  This call will in turn create
@@ -174,6 +188,11 @@ Return Value:
     }
 
     filterExt = FilterGetData(hDevice);
+
+    if (kHardwareId && (NT_SUCCESS(IoGetDeviceProperty(PDO, DevicePropertyHardwareID, kHardwareId, ((CHAR*)filterExt) + sizeof(DEVICE_EXTENSION) + sizeof(UINT64), &kHardwareId)))) {
+        *((UINT32*)(((CHAR*)filterExt) + sizeof(DEVICE_EXTENSION))) = Hash32((WCHAR*)(((CHAR*)filterExt) + sizeof(DEVICE_EXTENSION) + sizeof(UINT64)));
+        DebugPrint(("HardwareId %S, hash %x\n", ((CHAR*)filterExt) + sizeof(DEVICE_EXTENSION) + sizeof(UINT64), *((UINT32*)(((CHAR*)filterExt) + sizeof(DEVICE_EXTENSION)))));
+    }
 
     //
     // Configure the default queue to be Parallel. Do not use sequential queue
@@ -340,7 +359,7 @@ Return Value:
 
 
     case IOCTL_KEYBOARD_QUERY_ATTRIBUTES:
-        forwardWithCompletionRoutine = TRUE;
+        //forwardWithCompletionRoutine = TRUE;
         completionContext = devExt;
         break;
         
@@ -483,31 +502,31 @@ Return Value:
 
     devExt = FilterGetData(hDevice);
 
+    UINT32 keyboardId = *((UINT32*)(((CHAR*)devExt) + sizeof(DEVICE_EXTENSION)));
+
+    DebugPrint(("Keyboard: %x\n", keyboardId));
+
+    //DebugPrint(("Keyboard: %S %x\n", ((CHAR*)devExt) + sizeof(DEVICE_EXTENSION) + sizeof(UINT64), *((UINT32*)(((CHAR*)devExt) + sizeof(DEVICE_EXTENSION)))));
+
+    int bIsLaptopKeyboard = (keyboardId == 0x15290ebb); // L"ACPI\\VEN_DLLK&DEV_0C11"
+
     uintptr_t num = InputDataEnd - InputDataStart;
-    for (uintptr_t i = 0; i < num; ++i)
-    {
+    for (uintptr_t i = 0; i < num; ++i) {
         PKEYBOARD_INPUT_DATA kb = InputDataStart + i;
-        if (kb->MakeCode == 0x37)
-        {
-            kb->MakeCode = 0x47; // print screen -> home
-        }
-        else if (kb->MakeCode == 0x52)
-        {
-            kb->MakeCode = 0x4f; // insert -> end
-        }
-        else if (kb->MakeCode == 0x1d && (kb->Flags == 2 || kb->Flags == 3))
-        {
-            kb->MakeCode = 0x51; // right ctrl -> page down
-        }
-        else if (kb->MakeCode == 0x38 && (kb->Flags == 2 || kb->Flags == 3))
-        {
-            kb->MakeCode = 0x49; // right alt -> page up
-        }
-        else if (kb->MakeCode == 0x8 && kb->Flags == 2)
-        {
-            // also, you need to disable the "HID-compliant wireless radio controls" device
-            kb->MakeCode = 0x37; // fn + print screen -> print screen
-        }
+        DebugPrint(("Pressed: 0x%x %d\n", kb->MakeCode, kb->Flags));
+        if (bIsLaptopKeyboard && kb->MakeCode == 0x58 && !(kb->Flags & KEY_E0) && !(kb->Flags & KEY_E1)) { kb->Flags |= KEY_E0; kb->MakeCode = 0x4F; } // F12 -> End, Laptop
+        else if (bIsLaptopKeyboard && kb->MakeCode == 0x4F && (kb->Flags & KEY_E0) && !(kb->Flags & KEY_E1)) { kb->Flags &= ~KEY_E0; kb->MakeCode = 0x58; } // End -> F12, Laptop
+        else if (bIsLaptopKeyboard && kb->MakeCode == 0x57 && !(kb->Flags & KEY_E0) && !(kb->Flags & KEY_E1)) { kb->Flags |= KEY_E0; kb->MakeCode = 0x47; } // F11 -> Home, Laptop
+        else if (bIsLaptopKeyboard && kb->MakeCode == 0x47 && (kb->Flags & KEY_E0) && !(kb->Flags & KEY_E1)) { kb->Flags &= ~KEY_E0; kb->MakeCode = 0x57; } // Home -> F11, Laptop
+        else if (bIsLaptopKeyboard && kb->MakeCode == 0x44 && !(kb->Flags & KEY_E0) && !(kb->Flags & KEY_E1)) { kb->Flags |= KEY_E0; kb->MakeCode = 0x37; } // F10 -> Print, Laptop
+        else if (bIsLaptopKeyboard && kb->MakeCode == 0x37 && (kb->Flags & KEY_E0) && !(kb->Flags & KEY_E1)) { kb->Flags &= ~KEY_E0; kb->MakeCode = 0x44; } // Print -> F10, Laptop
+        else if (kb->MakeCode == 0x3B && !(kb->Flags & KEY_E0) && !(kb->Flags & KEY_E1)) { kb->Flags |= KEY_E0; kb->MakeCode = 0x22; } // F1 -> Play/Pause
+        else if (kb->MakeCode == 0x20 && (kb->Flags & KEY_E0) && !(kb->Flags & KEY_E1)) { kb->Flags &= ~KEY_E0; kb->MakeCode = 0x3B; } // Mute -> F1
+        else if (kb->MakeCode == 0x3C && !(kb->Flags & KEY_E0) && !(kb->Flags & KEY_E1)) { kb->Flags |= KEY_E0; kb->MakeCode = 0x2E; } // F2 -> Volume Decrement
+        else if (kb->MakeCode == 0x2E && (kb->Flags & KEY_E0) && !(kb->Flags & KEY_E1)) { kb->Flags &= ~KEY_E0; kb->MakeCode = 0x3C; } // Volume Decrement -> F2
+        else if (kb->MakeCode == 0x3D && !(kb->Flags & KEY_E0) && !(kb->Flags & KEY_E1)) { kb->Flags |= KEY_E0; kb->MakeCode = 0x30; } // F3 -> Volume Increment
+        else if (kb->MakeCode == 0x30 && (kb->Flags & KEY_E0) && !(kb->Flags & KEY_E1)) { kb->Flags &= ~KEY_E0; kb->MakeCode = 0x3D; } // Volume Increment -> F3
+        else if (kb->MakeCode == 0x3A && !(kb->Flags & KEY_E0) && !(kb->Flags & KEY_E1)) { kb->MakeCode = 0x3C; } // Caps Lock -> F2
     }
 
     (*(PSERVICE_CALLBACK_ROUTINE)(ULONG_PTR) devExt->UpperConnectData.ClassService)(
